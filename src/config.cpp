@@ -46,16 +46,19 @@
 #include <iostream>
 
 
-static const struct QCommandLineConfigEntry flags[] =
-{
+static const struct QCommandLineConfigEntry flags[] = {
     { QCommandLine::Option, '\0', "cookies-file", "Sets the file name to store the persistent cookies", QCommandLine::Optional },
     { QCommandLine::Option, '\0', "config", "Specifies JSON-formatted configuration file", QCommandLine::Optional },
     { QCommandLine::Option, '\0', "debug", "Prints additional warning and debug message: 'true' or 'false' (default)", QCommandLine::Optional },
     { QCommandLine::Option, '\0', "disk-cache", "Enables disk cache: 'true' or 'false' (default)", QCommandLine::Optional },
+    { QCommandLine::Option, '\0', "disk-cache-path", "Specifies the location for the disk cache", QCommandLine::Optional },
     { QCommandLine::Option, '\0', "ignore-ssl-errors", "Ignores SSL errors (expired/self-signed certificate errors): 'true' or 'false' (default)", QCommandLine::Optional },
     { QCommandLine::Option, '\0', "load-images", "Loads all inlined images: 'true' (default) or 'false'", QCommandLine::Optional },
-    { QCommandLine::Option, '\0', "local-storage-path", "Specifies the location for offline local storage", QCommandLine::Optional },
-    { QCommandLine::Option, '\0', "local-storage-quota", "Sets the maximum size of the offline local storage (in KB)", QCommandLine::Optional },
+    { QCommandLine::Option, '\0', "local-url-access", "Allows use of 'file:///' URLs: 'true' (default) or 'false'", QCommandLine::Optional },
+    { QCommandLine::Option, '\0', "local-storage-path", "Specifies the location for local storage", QCommandLine::Optional },
+    { QCommandLine::Option, '\0', "local-storage-quota", "Sets the maximum size of the local storage (in KB)", QCommandLine::Optional },
+    { QCommandLine::Option, '\0', "offline-storage-path", "Specifies the location for offline storage", QCommandLine::Optional },
+    { QCommandLine::Option, '\0', "offline-storage-quota", "Sets the maximum size of the offline storage (in KB)", QCommandLine::Optional },
     { QCommandLine::Option, '\0', "local-to-remote-url-access", "Allows local content to access remote URL: 'true' or 'false' (default)", QCommandLine::Optional },
     { QCommandLine::Option, '\0', "max-disk-cache-size", "Limits the size of the disk cache (in KB)", QCommandLine::Optional },
     { QCommandLine::Option, '\0', "output-encoding", "Sets the encoding for the terminal output, default is 'utf8'", QCommandLine::Optional },
@@ -67,21 +70,20 @@ static const struct QCommandLineConfigEntry flags[] =
     { QCommandLine::Option, '\0', "script-encoding", "Sets the encoding used for the starting script, default is 'utf8'", QCommandLine::Optional },
     { QCommandLine::Option, '\0', "script-language", "Sets the script language instead of detecting it: 'javascript'", QCommandLine::Optional },
     { QCommandLine::Option, '\0', "web-security", "Enables web security, 'true' (default) or 'false'", QCommandLine::Optional },
-    { QCommandLine::Option, '\0', "ssl-protocol", "Sets the SSL protocol (supported protocols: 'SSLv3' (default), 'SSLv2', 'TLSv1', 'any')", QCommandLine::Optional },
-    { QCommandLine::Option, '\0', "ssl-certificates-path", "Sets the location for custom CA certificates (if none set, uses system default)", QCommandLine::Optional },
-    { QCommandLine::Option, '\0', "webdriver", "Starts in 'Remote WebDriver mode' (embedded GhostDriver): '[[<IP>:]<PORT>]' (default '127.0.0.1:8910') ", QCommandLine::Optional },
-    { QCommandLine::Option, '\0', "webdriver-logfile", "File where to write the WebDriver's Log (default 'none') (NOTE: needs '--webdriver') ", QCommandLine::Optional },
-    { QCommandLine::Option, '\0', "webdriver-loglevel", "WebDriver Logging Level: (supported: 'ERROR', 'WARN', 'INFO', 'DEBUG') (default 'INFO') (NOTE: needs '--webdriver') ", QCommandLine::Optional },
-    { QCommandLine::Option, '\0', "webdriver-selenium-grid-hub", "URL to the Selenium Grid HUB: 'URL_TO_HUB' (default 'none') (NOTE: needs '--webdriver') ", QCommandLine::Optional },
-    { QCommandLine::Param, '\0', "script", "Script", QCommandLine::Flags(QCommandLine::Optional|QCommandLine::ParameterFence)},
+    { QCommandLine::Option, '\0', "ssl-protocol", "Selects a specific SSL protocol version to offer. Values (case insensitive): TLSv1.2, TLSv1.1, TLSv1.0, TLSv1 (same as v1.0), SSLv3, or ANY. Default is to offer all that Qt thinks are secure (SSLv3 and up). Not all values may be supported, depending on the system OpenSSL library.", QCommandLine::Optional },
+    { QCommandLine::Option, '\0', "ssl-ciphers", "Sets supported TLS/SSL ciphers. Argument is a colon-separated list of OpenSSL cipher names (macros like ALL, kRSA, etc. may not be used). Default matches modern browsers.", QCommandLine::Optional },
+    { QCommandLine::Option, '\0', "ssl-certificates-path", "Sets the location for custom CA certificates (if none set, uses environment variable SSL_CERT_DIR. If none set too, uses system default)", QCommandLine::Optional },
+    { QCommandLine::Option, '\0', "ssl-client-certificate-file", "Sets the location of a client certificate", QCommandLine::Optional },
+    { QCommandLine::Option, '\0', "ssl-client-key-file", "Sets the location of a clients' private key", QCommandLine::Optional },
+    { QCommandLine::Option, '\0', "ssl-client-key-passphrase", "Sets the passphrase for the clients' private key", QCommandLine::Optional },
+    { QCommandLine::Param, '\0', "script", "Script", QCommandLine::Flags(QCommandLine::Optional | QCommandLine::ParameterFence)},
     { QCommandLine::Param, '\0', "argument", "Script argument", QCommandLine::OptionalMultiple },
-    { QCommandLine::Switch, 'w', "wd", "Equivalent to '--webdriver' option above", QCommandLine::Optional },
     { QCommandLine::Switch, 'h', "help", "Shows this message and quits", QCommandLine::Optional },
     { QCommandLine::Switch, 'v', "version", "Prints out PhantomJS version", QCommandLine::Optional },
     QCOMMANDLINE_CONFIG_ENTRY_END
 };
 
-Config::Config(QObject *parent)
+Config::Config(QObject* parent)
     : QObject(parent)
 {
     m_cmdLine = new QCommandLine(this);
@@ -93,54 +95,32 @@ Config::Config(QObject *parent)
     resetToDefaults();
 }
 
-void Config::init(const QStringList *const args)
+void Config::init(const QStringList* const args)
 {
     resetToDefaults();
 
     QByteArray envSslCertDir = qgetenv("SSL_CERT_DIR");
-    if (!envSslCertDir.isEmpty())
+    if (!envSslCertDir.isEmpty()) {
         setSslCertificatesPath(envSslCertDir);
+    }
 
     processArgs(*args);
 }
 
-void Config::processArgs(const QStringList &args)
+void Config::processArgs(const QStringList& args)
 {
-    connect(m_cmdLine, SIGNAL(switchFound(const QString &)), this, SLOT(handleSwitch(const QString &)));
-    connect(m_cmdLine, SIGNAL(optionFound(const QString &, const QVariant &)), this, SLOT(handleOption(const QString &, const QVariant &)));
-    connect(m_cmdLine, SIGNAL(paramFound(const QString &, const QVariant &)), this, SLOT(handleParam(const QString &, const QVariant &)));
-    connect(m_cmdLine, SIGNAL(parseError(const QString &)), this, SLOT(handleError(const QString &)));
+    connect(m_cmdLine, SIGNAL(switchFound(const QString&)), this, SLOT(handleSwitch(const QString&)));
+    connect(m_cmdLine, SIGNAL(optionFound(const QString&, const QVariant&)), this, SLOT(handleOption(const QString&, const QVariant&)));
+    connect(m_cmdLine, SIGNAL(paramFound(const QString&, const QVariant&)), this, SLOT(handleParam(const QString&, const QVariant&)));
+    connect(m_cmdLine, SIGNAL(parseError(const QString&)), this, SLOT(handleError(const QString&)));
 
     m_cmdLine->setArguments(args);
     m_cmdLine->setConfig(flags);
     m_cmdLine->parse();
 
-    // Inject command line parameters to be picked up by GhostDriver
-    if (isWebdriverMode()) {
-        QStringList argsForGhostDriver;
-
-        m_scriptFile = "main.js";                                           //< launch script
-
-        argsForGhostDriver << QString("--ip=%1").arg(m_webdriverIp);        //< "--ip=IP"
-        argsForGhostDriver << QString("--port=%1").arg(m_webdriverPort);    //< "--port=PORT"
-
-        if (!m_webdriverSeleniumGridHub.isEmpty()) {
-            argsForGhostDriver << QString("--hub=%1").arg(m_webdriverSeleniumGridHub);  //< "--hub=SELENIUM_GRID_HUB_URL"
-        }
-
-        if (!m_webdriverLogFile.isEmpty()) {
-            argsForGhostDriver << QString("--logFile=%1").arg(m_webdriverLogFile);          //< "--logFile=LOG_FILE"
-            argsForGhostDriver << "--logColor=false";                                   //< Force no-color-output in Log File
-        }
-
-        argsForGhostDriver << QString("--logLevel=%1").arg(m_webdriverLogLevel);    //< "--logLevel=LOG_LEVEL"
-
-        // Clear current args and override with those
-        setScriptArgs(argsForGhostDriver);
-    }
 }
 
-void Config::loadJsonFile(const QString &filePath)
+void Config::loadJsonFile(const QString& filePath)
 {
     QString jsonConfig;
     QFile f(filePath);
@@ -169,7 +149,7 @@ void Config::loadJsonFile(const QString &filePath)
     // Add this object to the global scope
     webPage.mainFrame()->addToJavaScriptWindowObject("config", this);
     // Apply the JSON config settings to this very object
-    webPage.mainFrame()->evaluateJavaScript(configurator.arg(jsonConfig), QString());
+    webPage.mainFrame()->evaluateJavaScript(configurator.arg(jsonConfig));
 }
 
 QString Config::helpText() const
@@ -192,7 +172,7 @@ QString Config::cookiesFile() const
     return m_cookiesFile;
 }
 
-void Config::setCookiesFile(const QString &value)
+void Config::setCookiesFile(const QString& value)
 {
     m_cookiesFile = value;
 }
@@ -202,7 +182,7 @@ QString Config::offlineStoragePath() const
     return m_offlineStoragePath;
 }
 
-void Config::setOfflineStoragePath(const QString &value)
+void Config::setOfflineStoragePath(const QString& value)
 {
     QDir dir(value);
     m_offlineStoragePath = dir.absolutePath();
@@ -216,6 +196,28 @@ int Config::offlineStorageDefaultQuota() const
 void Config::setOfflineStorageDefaultQuota(int offlineStorageDefaultQuota)
 {
     m_offlineStorageDefaultQuota = offlineStorageDefaultQuota * 1024;
+}
+
+
+QString Config::localStoragePath() const
+{
+    return m_localStoragePath;
+}
+
+void Config::setLocalStoragePath(const QString& value)
+{
+    QDir dir(value);
+    m_localStoragePath = dir.absolutePath();
+}
+
+int Config::localStorageDefaultQuota() const
+{
+    return m_localStorageDefaultQuota;
+}
+
+void Config::setLocalStorageDefaultQuota(int localStorageDefaultQuota)
+{
+    m_localStorageDefaultQuota = localStorageDefaultQuota * 1024;
 }
 
 bool Config::diskCacheEnabled() const
@@ -238,6 +240,17 @@ void Config::setMaxDiskCacheSize(int maxDiskCacheSize)
     m_maxDiskCacheSize = maxDiskCacheSize;
 }
 
+QString Config::diskCachePath() const
+{
+    return m_diskCachePath;
+}
+
+void Config::setDiskCachePath(const QString& value)
+{
+    QDir dir(value);
+    m_diskCachePath = dir.absolutePath();
+}
+
 bool Config::ignoreSslErrors() const
 {
     return m_ignoreSslErrors;
@@ -246,6 +259,16 @@ bool Config::ignoreSslErrors() const
 void Config::setIgnoreSslErrors(const bool value)
 {
     m_ignoreSslErrors = value;
+}
+
+bool Config::localUrlAccessEnabled() const
+{
+    return m_localUrlAccessEnabled;
+}
+
+void Config::setLocalUrlAccessEnabled(const bool value)
+{
+    m_localUrlAccessEnabled = value;
 }
 
 bool Config::localToRemoteUrlAccessEnabled() const
@@ -263,7 +286,7 @@ QString Config::outputEncoding() const
     return m_outputEncoding;
 }
 
-void Config::setOutputEncoding(const QString &value)
+void Config::setOutputEncoding(const QString& value)
 {
     if (value.isEmpty()) {
         return;
@@ -277,7 +300,7 @@ QString Config::proxyType() const
     return m_proxyType;
 }
 
-void Config::setProxyType(const QString value)
+void Config::setProxyType(const QString& value)
 {
     m_proxyType = value;
 }
@@ -287,7 +310,7 @@ QString Config::proxy() const
     return m_proxyHost + ":" + QString::number(m_proxyPort);
 }
 
-void Config::setProxy(const QString &value)
+void Config::setProxy(const QString& value)
 {
     QUrl proxyUrl = QUrl::fromUserInput(value);
 
@@ -297,7 +320,7 @@ void Config::setProxy(const QString &value)
     }
 }
 
-void Config::setProxyAuth(const QString &value)
+void Config::setProxyAuth(const QString& value)
 {
     QString proxyUser = value;
     QString proxyPass = "";
@@ -341,7 +364,7 @@ QStringList Config::scriptArgs() const
     return m_scriptArgs;
 }
 
-void Config::setScriptArgs(const QStringList &value)
+void Config::setScriptArgs(const QStringList& value)
 {
     m_scriptArgs.clear();
 
@@ -356,7 +379,7 @@ QString Config::scriptEncoding() const
     return m_scriptEncoding;
 }
 
-void Config::setScriptEncoding(const QString &value)
+void Config::setScriptEncoding(const QString& value)
 {
     if (value.isEmpty()) {
         return;
@@ -365,26 +388,12 @@ void Config::setScriptEncoding(const QString &value)
     m_scriptEncoding = value;
 }
 
-QString Config::scriptLanguage() const
-{
-    return m_scriptLanguage;
-}
-
-void Config::setScriptLanguage(const QString &value)
-{
-    if (value.isEmpty()) {
-        return;
-    }
-
-    m_scriptLanguage = value;
-}
-
 QString Config::scriptFile() const
 {
     return m_scriptFile;
 }
 
-void Config::setScriptFile(const QString &value)
+void Config::setScriptFile(const QString& value)
 {
     m_scriptFile = value;
 }
@@ -394,7 +403,7 @@ QString Config::unknownOption() const
     return m_unknownOption;
 }
 
-void Config::setUnknownOption(const QString &value)
+void Config::setUnknownOption(const QString& value)
 {
     m_unknownOption = value;
 }
@@ -469,60 +478,6 @@ bool Config::javascriptCanCloseWindows() const
     return m_javascriptCanCloseWindows;
 }
 
-void Config::setWebdriver(const QString &webdriverConfig)
-{
-    // Parse and validate the configuration
-    bool isValidPort;
-    QStringList wdCfg = webdriverConfig.split(':');
-    if (wdCfg.length() == 1 && wdCfg[0].toInt(&isValidPort) && isValidPort) {
-        // Only a PORT was provided
-        m_webdriverPort = wdCfg[0];
-    } else if(wdCfg.length() == 2 && !wdCfg[0].isEmpty() && wdCfg[1].toInt(&isValidPort) && isValidPort) {
-        // Both IP and PORT provided
-        m_webdriverIp = wdCfg[0];
-        m_webdriverPort = wdCfg[1];
-    }
-}
-
-QString Config::webdriver() const
-{
-    return QString("%1:%2").arg(m_webdriverIp).arg(m_webdriverPort);
-}
-
-bool Config::isWebdriverMode() const
-{
-    return !m_webdriverPort.isEmpty();
-}
-
-void Config::setWebdriverLogFile(const QString& webdriverLogFile)
-{
-    m_webdriverLogFile = webdriverLogFile;
-}
-
-QString Config::webdriverLogFile() const
-{
-    return m_webdriverLogFile;
-}
-
-void Config::setWebdriverLogLevel(const QString& webdriverLogLevel)
-{
-    m_webdriverLogLevel = webdriverLogLevel;
-}
-
-QString Config::webdriverLogLevel() const
-{
-    return m_webdriverLogLevel;
-}
-
-void Config::setWebdriverSeleniumGridHub(const QString &hubUrl)
-{
-    m_webdriverSeleniumGridHub = hubUrl;
-}
-
-QString Config::webdriverSeleniumGridHub() const
-{
-    return m_webdriverSeleniumGridHub;
-}
 
 // private:
 void Config::resetToDefaults()
@@ -531,9 +486,13 @@ void Config::resetToDefaults()
     m_cookiesFile = QString();
     m_offlineStoragePath = QString();
     m_offlineStorageDefaultQuota = -1;
+    m_localStoragePath = QString();
+    m_localStorageDefaultQuota = -1;
     m_diskCacheEnabled = false;
     m_maxDiskCacheSize = -1;
+    m_diskCachePath = QString();
     m_ignoreSslErrors = false;
+    m_localUrlAccessEnabled = true;
     m_localToRemoteUrlAccessEnabled = false;
     m_outputEncoding = "UTF-8";
     m_proxyType = "http";
@@ -543,7 +502,6 @@ void Config::resetToDefaults()
     m_proxyAuthPass.clear();
     m_scriptArgs.clear();
     m_scriptEncoding = "UTF-8";
-    m_scriptLanguage.clear();
     m_scriptFile.clear();
     m_unknownOption.clear();
     m_versionFlag = false;
@@ -555,26 +513,43 @@ void Config::resetToDefaults()
     m_javascriptCanCloseWindows = true;
     m_helpFlag = false;
     m_printDebugMessages = false;
-    m_sslProtocol = "sslv3";
+    m_sslProtocol = "default";
+    // Default taken from Chromium 35.0.1916.153
+    m_sslCiphers = ("ECDHE-ECDSA-AES128-GCM-SHA256"
+                    ":ECDHE-RSA-AES128-GCM-SHA256"
+                    ":DHE-RSA-AES128-GCM-SHA256"
+                    ":ECDHE-ECDSA-AES256-SHA"
+                    ":ECDHE-ECDSA-AES128-SHA"
+                    ":ECDHE-RSA-AES128-SHA"
+                    ":ECDHE-RSA-AES256-SHA"
+                    ":ECDHE-ECDSA-RC4-SHA"
+                    ":ECDHE-RSA-RC4-SHA"
+                    ":DHE-RSA-AES128-SHA"
+                    ":DHE-DSS-AES128-SHA"
+                    ":DHE-RSA-AES256-SHA"
+                    ":AES128-GCM-SHA256"
+                    ":AES128-SHA"
+                    ":AES256-SHA"
+                    ":DES-CBC3-SHA"
+                    ":RC4-SHA"
+                    ":RC4-MD5");
     m_sslCertificatesPath.clear();
-    m_webdriverIp = QString();
-    m_webdriverPort = QString();
-    m_webdriverLogFile = QString();
-    m_webdriverLogLevel = "INFO";
-    m_webdriverSeleniumGridHub = QString();
+    m_sslClientCertificateFile.clear();
+    m_sslClientKeyFile.clear();
+    m_sslClientKeyPassphrase.clear();
 }
 
-void Config::setProxyAuthPass(const QString &value)
+void Config::setProxyAuthPass(const QString& value)
 {
     m_proxyAuthPass = value;
 }
 
-void Config::setProxyAuthUser(const QString &value)
+void Config::setProxyAuthUser(const QString& value)
 {
     m_proxyAuthUser = value;
 }
 
-void Config::setProxyHost(const QString &value)
+void Config::setProxyHost(const QString& value)
 {
     m_proxyHost = value;
 }
@@ -604,17 +579,13 @@ void Config::setPrintDebugMessages(const bool value)
     m_printDebugMessages = value;
 }
 
-void Config::handleSwitch(const QString &sw)
+void Config::handleSwitch(const QString& sw)
 {
     setHelpFlag(sw == "help");
     setVersionFlag(sw == "version");
-
-    if (sw == "wd") {
-        setWebdriver(DEFAULT_WEBDRIVER_CONFIG);
-    }
 }
 
-void Config::handleOption(const QString &option, const QVariant &value)
+void Config::handleOption(const QString& option, const QVariant& value)
 {
     bool boolValue = false;
 
@@ -623,6 +594,7 @@ void Config::handleOption(const QString &option, const QVariant &value)
     booleanFlags << "disk-cache";
     booleanFlags << "ignore-ssl-errors";
     booleanFlags << "load-images";
+    booleanFlags << "local-url-access";
     booleanFlags << "local-to-remote-url-access";
     booleanFlags << "remote-debugger-autorun";
     booleanFlags << "web-security";
@@ -650,6 +622,10 @@ void Config::handleOption(const QString &option, const QVariant &value)
         setDiskCacheEnabled(boolValue);
     }
 
+    if (option == "disk-cache-path") {
+        setDiskCachePath(value.toString());
+    }
+
     if (option == "ignore-ssl-errors") {
         setIgnoreSslErrors(boolValue);
     }
@@ -659,11 +635,23 @@ void Config::handleOption(const QString &option, const QVariant &value)
     }
 
     if (option == "local-storage-path") {
-        setOfflineStoragePath(value.toString());
+        setLocalStoragePath(value.toString());
     }
 
     if (option == "local-storage-quota") {
+        setLocalStorageDefaultQuota(value.toInt());
+    }
+
+    if (option == "offline-storage-path") {
+        setOfflineStoragePath(value.toString());
+    }
+
+    if (option == "offline-storage-quota") {
         setOfflineStorageDefaultQuota(value.toInt());
+    }
+
+    if (option == "local-url-access") {
+        setLocalUrlAccessEnabled(boolValue);
     }
 
     if (option == "local-to-remote-url-access") {
@@ -703,44 +691,41 @@ void Config::handleOption(const QString &option, const QVariant &value)
         setScriptEncoding(value.toString());
     }
 
-    if (option == "script-language") {
-        setScriptLanguage(value.toString());
-    }
-
     if (option == "web-security") {
         setWebSecurityEnabled(boolValue);
     }
     if (option == "ssl-protocol") {
         setSslProtocol(value.toString());
     }
+    if (option == "ssl-ciphers") {
+        setSslCiphers(value.toString());
+    }
     if (option == "ssl-certificates-path") {
         setSslCertificatesPath(value.toString());
     }
-    if (option == "webdriver") {
-        setWebdriver(value.toString().length() > 0 ? value.toString() : DEFAULT_WEBDRIVER_CONFIG);
+    if (option == "ssl-client-certificate-file") {
+        setSslClientCertificateFile(value.toString());
     }
-    if (option == "webdriver-logfile") {
-        setWebdriverLogFile(value.toString());
+    if (option == "ssl-client-key-file") {
+        setSslClientKeyFile(value.toString());
     }
-    if (option == "webdriver-loglevel") {
-        setWebdriverLogLevel(value.toString());
-    }
-    if (option == "webdriver-selenium-grid-hub") {
-        setWebdriverSeleniumGridHub(value.toString());
+    if (option == "ssl-client-key-passphrase") {
+        setSslClientKeyPassphrase(value.toByteArray());
     }
 }
 
-void Config::handleParam(const QString& param, const QVariant &value)
+void Config::handleParam(const QString& param, const QVariant& value)
 {
     Q_UNUSED(param);
 
-    if (m_scriptFile.isEmpty())
+    if (m_scriptFile.isEmpty()) {
         m_scriptFile = value.toString();
-    else
+    } else {
         m_scriptArgs += value.toString();
+    }
 }
 
-void Config::handleError(const QString &error)
+void Config::handleError(const QString& error)
 {
     setUnknownOption(QString("Error: %1").arg(error));
 }
@@ -755,6 +740,17 @@ void Config::setSslProtocol(const QString& sslProtocolName)
     m_sslProtocol = sslProtocolName.toLower();
 }
 
+QString Config::sslCiphers() const
+{
+    return m_sslCiphers;
+}
+
+void Config::setSslCiphers(const QString& sslCiphersName)
+{
+    // OpenSSL cipher strings are case sensitive.
+    m_sslCiphers = sslCiphersName;
+}
+
 QString Config::sslCertificatesPath() const
 {
     return m_sslCertificatesPath;
@@ -764,11 +760,42 @@ void Config::setSslCertificatesPath(const QString& sslCertificatesPath)
 {
     QFileInfo sslPathInfo = QFileInfo(sslCertificatesPath);
     if (sslPathInfo.isDir()) {
-        if (sslCertificatesPath.endsWith('/'))
+        if (sslCertificatesPath.endsWith('/')) {
             m_sslCertificatesPath = sslCertificatesPath + "*";
-        else
+        } else {
             m_sslCertificatesPath = sslCertificatesPath + "/*";
+        }
     } else {
         m_sslCertificatesPath = sslCertificatesPath;
     }
+}
+
+QString Config::sslClientCertificateFile() const
+{
+    return m_sslClientCertificateFile;
+}
+
+void Config::setSslClientCertificateFile(const QString& sslClientCertificateFile)
+{
+    m_sslClientCertificateFile = sslClientCertificateFile;
+}
+
+QString Config::sslClientKeyFile() const
+{
+    return m_sslClientKeyFile;
+}
+
+void Config::setSslClientKeyFile(const QString& sslClientKeyFile)
+{
+    m_sslClientKeyFile = sslClientKeyFile;
+}
+
+QByteArray Config::sslClientKeyPassphrase() const
+{
+    return m_sslClientKeyPassphrase;
+}
+
+void Config::setSslClientKeyPassphrase(const QByteArray& sslClientKeyPassphrase)
+{
+    m_sslClientKeyPassphrase = sslClientKeyPassphrase;
 }

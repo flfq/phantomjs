@@ -28,21 +28,59 @@
   THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include "utils.h"
+#include "consts.h"
+#include "terminal.h"
+
 #include <QFile>
 #include <QDebug>
 #include <QDateTime>
 #include <QDir>
-#include <QTemporaryFile>
+#include <QtWebKitWidgets/QWebFrame>
 
-#include "consts.h"
-#include "terminal.h"
-#include "utils.h"
+static QString findScript(const QString& jsFilePath, const QString& libraryPath)
+{
+    if (!jsFilePath.isEmpty()) {
+        QFile jsFile;
 
-QTemporaryFile* Utils::m_tempHarness = 0;
-QTemporaryFile* Utils::m_tempWrapper = 0;
-bool Utils::printDebugMessages = false;
+        // Is file in the PWD?
+        jsFile.setFileName(QDir::fromNativeSeparators(jsFilePath)); //< Normalise User-provided path
+        if (!jsFile.exists()) {
+            // File is not in the PWD. Is it in the lookup directory?
+            jsFile.setFileName(libraryPath + '/' + QDir::fromNativeSeparators(jsFilePath));
+        }
 
-void Utils::messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
+        return jsFile.fileName();
+    }
+    return QString();
+}
+
+static QString jsFromScriptFile(const QString& scriptPath, const Encoding& enc)
+{
+    QFile jsFile(scriptPath);
+    if (jsFile.exists() && jsFile.open(QFile::ReadOnly)) {
+        QString scriptBody = enc.decode(jsFile.readAll());
+        jsFile.close();
+
+        // Remove CLI script heading
+        if (scriptBody.startsWith("#!")) {
+            int len = scriptBody.indexOf(QRegExp("[\r\n]"));
+            if (len == -1) { len = scriptBody.length(); }
+            scriptBody.remove(0, len);
+        }
+
+        return scriptBody;
+    } else {
+        return QString();
+    }
+}
+
+namespace Utils
+{
+
+bool printDebugMessages = false;
+
+void messageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg)
 {
     Q_UNUSED(context);
     QDateTime now = QDateTime::currentDateTime();
@@ -66,47 +104,13 @@ void Utils::messageHandler(QtMsgType type, const QMessageLogContext &context, co
         abort();
     }
 }
-#ifdef Q_OS_WIN32
-bool Utils::exceptionHandler(const TCHAR* dump_path, const TCHAR* minidump_id,
-                             void* context, EXCEPTION_POINTERS* exinfo,
-                             MDRawAssertionInfo *assertion, bool succeeded)
-{
-    Q_UNUSED(exinfo);
-    Q_UNUSED(assertion);
-    Q_UNUSED(context);
-  
-    fprintf(stderr, "PhantomJS has crashed. Please read the crash reporting guide at " \
-                    "https://github.com/ariya/phantomjs/wiki/Crash-Reporting and file a " \
-                    "bug report at https://github.com/ariya/phantomjs/issues/new with the " \
-                    "crash dump file attached: %ls\\%ls.dmp\n",
-                    dump_path, minidump_id);
-    return succeeded;
-}
-#else
-bool Utils::exceptionHandler(const char* dump_path, const char* minidump_id, void* context, bool succeeded)
-{
-    Q_UNUSED(context);
-    fprintf(stderr, "PhantomJS has crashed. Please read the crash reporting guide at " \
-                    "https://github.com/ariya/phantomjs/wiki/Crash-Reporting and file a " \
-                    "bug report at https://github.com/ariya/phantomjs/issues/new with the " \
-                    "crash dump file attached: %s/%s.dmp\n",
-                    dump_path, minidump_id);
-    return succeeded;
-}
-#endif
 
-bool Utils::injectJsInFrame(const QString &jsFilePath, const QString &libraryPath, QWebFrame *targetFrame, const bool startingScript)
-{
-    return injectJsInFrame(jsFilePath, QString(), Encoding::UTF8, libraryPath, targetFrame, startingScript);
-}
-
-bool Utils::injectJsInFrame(const QString &jsFilePath, const QString &jsFileLanguage, const Encoding &jsFileEnc, const QString &libraryPath, QWebFrame *targetFrame, const bool startingScript)
+bool injectJsInFrame(const QString& jsFilePath, const Encoding& jsFileEnc, const QString& libraryPath, QWebFrame* targetFrame, const bool startingScript)
 {
     // Don't do anything if an empty string is passed
     QString scriptPath = findScript(jsFilePath, libraryPath);
-    QString scriptBody = jsFromScriptFile(scriptPath, jsFileLanguage, jsFileEnc);
-    if (scriptBody.isEmpty())
-    {
+    QString scriptBody = jsFromScriptFile(scriptPath, jsFileEnc);
+    if (scriptBody.isEmpty()) {
         if (startingScript) {
             Terminal::instance()->cerr(QString("Can't open '%1'").arg(jsFilePath));
         } else {
@@ -115,102 +119,30 @@ bool Utils::injectJsInFrame(const QString &jsFilePath, const QString &jsFileLang
         return false;
     }
     // Execute JS code in the context of the document
-    targetFrame->evaluateJavaScript(scriptBody, jsFilePath);
+    targetFrame->evaluateJavaScript(scriptBody);
     return true;
 }
 
-bool Utils::loadJSForDebug(const QString& jsFilePath, const QString& libraryPath, QWebFrame* targetFrame, const bool autorun)
-{
-    return loadJSForDebug(jsFilePath, QString(), Encoding::UTF8, libraryPath, targetFrame, autorun);
-}
-
-bool Utils::loadJSForDebug(const QString& jsFilePath, const QString &jsFileLanguage, const Encoding& jsFileEnc, const QString& libraryPath, QWebFrame* targetFrame, const bool autorun)
+bool loadJSForDebug(const QString& jsFilePath, const Encoding& jsFileEnc, const QString& libraryPath, QWebFrame* targetFrame, const bool autorun)
 {
     QString scriptPath = findScript(jsFilePath, libraryPath);
-    QString scriptBody = jsFromScriptFile(scriptPath, jsFileLanguage, jsFileEnc);
+    QString scriptBody = jsFromScriptFile(scriptPath, jsFileEnc);
 
-    QString remoteDebuggerHarnessSrc =  Utils::readResourceFileUtf8(":/remote_debugger_harness.html");
-    remoteDebuggerHarnessSrc = remoteDebuggerHarnessSrc.arg(scriptBody);
-    targetFrame->setHtml(remoteDebuggerHarnessSrc);
+    scriptBody = QString("function __run() {\n%1\n}").arg(scriptBody);
+    targetFrame->evaluateJavaScript(scriptBody);
 
     if (autorun) {
-        targetFrame->evaluateJavaScript("__run()", QString());
+        targetFrame->evaluateJavaScript("__run()");
     }
 
     return true;
 }
 
-QString Utils::findScript(const QString& jsFilePath, const QString &libraryPath)
-{
-    QString filePath = jsFilePath;
-    if (!jsFilePath.isEmpty()) {
-        QFile jsFile;
-
-        // Is file in the PWD?
-        jsFile.setFileName(QDir::fromNativeSeparators(jsFilePath)); //< Normalise User-provided path
-        if (!jsFile.exists()) {
-            // File is not in the PWD. Is it in the lookup directory?
-            jsFile.setFileName(libraryPath + '/' + QDir::fromNativeSeparators(jsFilePath));
-        }
-
-        return jsFile.fileName();
-    }
-    return QString();
-}
-
-QString Utils::jsFromScriptFile(const QString& scriptPath, const QString& scriptLanguage, const Encoding& enc)
-{
-    QFile jsFile(scriptPath);
-    if (jsFile.exists() && jsFile.open(QFile::ReadOnly)) {
-        QString scriptBody = enc.decode(jsFile.readAll());
-        jsFile.close();
-
-        // Remove CLI script heading
-        if (scriptBody.startsWith("#!")) {
-            int len = scriptBody.indexOf(QRegExp("[\r\n]"));
-            if (len == -1) len = scriptBody.length();
-            scriptBody.remove(0, len);
-        }
-
-        // If a language is specified and is not "javascript", reject it.
-        if (scriptLanguage != "javascript" && !scriptLanguage.isNull()) {
-            QString errMessage = QString("Unsupported language: %1").arg(scriptLanguage);
-            Terminal::instance()->cerr(errMessage);
-            qWarning("%s", qPrintable(errMessage));
-            return QString();
-        }
-
-        return scriptBody;
-    } else {
-        return QString();
-    }
-}
-
-
-void
-Utils::cleanupFromDebug()
-{
-    if (m_tempHarness) {
-        // Will erase the temp file on disk
-        delete m_tempHarness;
-        m_tempHarness = 0;
-    }
-    if (m_tempWrapper) {
-        delete m_tempWrapper;
-        m_tempWrapper = 0;
-    }
-}
-
-
-QString Utils::readResourceFileUtf8(const QString &resourceFilePath)
+QString readResourceFileUtf8(const QString& resourceFilePath)
 {
     QFile f(resourceFilePath);
     f.open(QFile::ReadOnly); //< It's OK to assume this succeed. If it doesn't, we have a bigger problem.
     return QString::fromUtf8(f.readAll());
 }
 
-// private:
-Utils::Utils()
-{
-    // Nothing to do here
-}
+}; // namespace Utils
